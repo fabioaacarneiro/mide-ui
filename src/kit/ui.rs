@@ -729,6 +729,10 @@ const LIGHT_COLORS: [[u8; 4]; 3] = [[255, 95, 87, 255], [254, 188, 46, 255], [40
 
 /// Tudo que os componentes compartilham num quadro.
 pub struct Ctx {
+    /// Imagens auxiliares das áreas com rolagem e recortes, guardadas para o próximo
+    /// quadro (criar uma imagem do tamanho da página a cada quadro custava uma boa parte
+    /// dele numa janela grande).
+    spare: Vec<Pixmap>,
     pub text: Text,
     pub theme: Theme,
     /// Tamanho novo pedido pelo app (`Ui::request_size`), e o mínimo.
@@ -871,8 +875,31 @@ pub struct MainPass {
 }
 
 impl Ctx {
+    /// Uma imagem `w`x`h` da reserva (ou nova), transparente se `clear`.
+    fn take_pixmap(&mut self, w: u32, h: u32, clear: bool) -> Pixmap {
+        match self.spare.iter().position(|p| p.width() == w && p.height() == h) {
+            Some(i) => {
+                let mut p = self.spare.swap_remove(i);
+                if clear {
+                    p.data_mut().fill(0);
+                }
+                p
+            }
+            None => Pixmap::new(w.max(1), h.max(1)).unwrap_or_else(|| Pixmap::new(1, 1).unwrap()),
+        }
+    }
+
+    /// Devolve uma imagem auxiliar à reserva (no máximo algumas, as mais recentes).
+    fn give_back(&mut self, pixmap: Pixmap) {
+        if self.spare.len() >= 6 {
+            self.spare.remove(0);
+        }
+        self.spare.push(pixmap);
+    }
+
     pub fn new(theme: Theme) -> Self {
         Self {
+            spare: Vec::new(),
             text: Text::new(),
             theme,
             size_request: None,
@@ -4528,6 +4555,35 @@ impl<'a> Ui<'a> {
         self.tile_wide(image, label, selected, size, size)
     }
 
+    /// O próximo [`Ui::tile`] de `size` cairia fora da parte à vista? Quem põe muitos
+    /// ladrilhos (uma pasta com milhares de itens) pula o trabalho de preparar os que
+    /// não aparecem (nome, ícone, miniatura) e chama [`Ui::tile_skip`] no lugar.
+    pub fn tile_hidden(&self, size: u32) -> bool {
+        let (w, h) = (size as f32 + 44.0, size as f32 + 46.0);
+        let spacing = self.ctx.theme.spacing;
+        let (x, y) = match self.flow {
+            Flow::Wrap => {
+                let w = w.min(self.width);
+                if self.row_x > self.x && self.row_x + w > self.x + self.width {
+                    (self.x, self.cursor_y + self.row_h + spacing)
+                } else {
+                    (self.row_x, self.cursor_y)
+                }
+            }
+            Flow::Row => (self.row_x, self.cursor_y),
+            Flow::Column => (self.x, self.cursor_y),
+        };
+        !self.visible((x, y, w, h))
+    }
+
+    /// Ocupa o lugar de um [`Ui::tile`] de `size` sem desenhar (o ladrilho está fora da
+    /// parte à vista, ver [`Ui::tile_hidden`]): a grade continua no mesmo lugar.
+    pub fn tile_skip(&mut self, size: u32) -> Response {
+        let id = self.ctx.id();
+        let rect = self.alloc(Some(size as f32 + 44.0), size as f32 + 46.0);
+        self.interact(id, rect)
+    }
+
     /// Ladrilho com área de imagem retangular (`iw` x `ih`), para miniaturas largas
     /// (papéis de parede). Ícones ficam centralizados no lado menor.
     pub fn tile_wide(&mut self, image: Tile, label: &str, selected: bool, iw: u32, ih: u32) -> Response {
@@ -4749,6 +4805,7 @@ impl<'a> Ui<'a> {
     pub fn clip(&mut self, rect: (f32, f32, f32, f32), add: impl FnOnce(&mut Ui)) {
         let (inner, _) = self.sub_area_from(rect.0, rect.1, rect.2, rect.3, rect.1, true, add);
         copy_back(&inner, self.canvas, crate::ui::draw::px(rect.0), crate::ui::draw::px(rect.1));
+        self.ctx.give_back(inner);
     }
 
     /// Cabeçalho de uma lista em colunas (como no Finder): "Nome" à esquerda e as
@@ -5300,9 +5357,13 @@ impl<'a> Ui<'a> {
     fn sub_area_from(&mut self, x: f32, top: f32, width: f32, height: f32, start: f32, copy: bool, add: impl FnOnce(&mut Ui)) -> (Pixmap, f32) {
         let h = height.clamp(1.0, 16384.0) as u32;
         let k = crate::ui::draw::scale();
-        let mut canvas = Pixmap::new((width.max(1.0) * k).ceil() as u32, (h as f32 * k).ceil() as u32).unwrap_or_else(|| Pixmap::new(1, 1).unwrap());
+        let (cw, ch) = ((width.max(1.0) * k).ceil() as u32, (h as f32 * k).ceil() as u32);
+        // Copiando a área inteira de dentro da imagem de cima, não precisa limpar antes.
+        let (px0, py0) = (crate::ui::draw::px(x), crate::ui::draw::px(top));
+        let inside = px0 >= 0 && py0 >= 0 && px0 as u32 + cw <= self.canvas.width() && py0 as u32 + ch <= self.canvas.height();
+        let mut canvas = self.ctx.take_pixmap(cw, ch, !(copy && inside));
         if copy {
-            copy_pixels(self.canvas, crate::ui::draw::px(x), crate::ui::draw::px(top), &mut canvas, 0, 0);
+            copy_pixels(self.canvas, px0, py0, &mut canvas, 0, 0);
         }
         let first = start - top;
         let used = {
@@ -5556,6 +5617,7 @@ impl<'a> Ui<'a> {
             scroll = 0.0;
         }
         copy_back(&inner, self.canvas, crate::ui::draw::px(x + pad), crate::ui::draw::px(y0));
+        self.ctx.give_back(inner);
         self.scrollbar_draw(&bar, scroll);
         self.ctx.memory.scroll.insert(id, scroll);
         self.cursor_y = y0 + h;
@@ -5946,11 +6008,7 @@ fn capsule(canvas: &mut Pixmap, rect: (f32, f32, f32, f32), t: &Theme) {
     fill_rounded(canvas, x - 0.5, y + 1.0, w + 1.0, h + 1.0, r + 0.5, color(t.shade(if t.dark { 40 } else { 10 })));
     let fill = if t.dark { [58, 58, 62, 235] } else { [255, 255, 255, 235] };
     fill_rounded(canvas, x, y, w, h, r, color(fill));
-    if let Some(path) = crate::ui::draw::rounded_rect(x + 0.5, y + 0.5, w - 1.0, h - 1.0, r - 0.5) {
-        let mut paint = Paint { anti_alias: true, ..Default::default() };
-        paint.set_color(color(if t.dark { [255, 255, 255, 30] } else { [0, 0, 0, 18] }));
-        canvas.stroke_path(&path, &paint, &Stroke { width: 1.0, ..Default::default() }, crate::ui::draw::tf(), None);
-    }
+    crate::ui::draw::stroke_rounded(canvas, x + 0.5, y + 0.5, w - 1.0, h - 1.0, r - 0.5, 1.0, color(if t.dark { [255, 255, 255, 30] } else { [0, 0, 0, 18] }));
 }
 
 /// Pontilhado de `x0` a `x1` na altura `y` (o sublinhado dos erros): pontos redondos de

@@ -82,24 +82,219 @@ pub fn fill_rounded_tb(pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, top:
     }
 }
 
-/// Preenche um retângulo arredondado com uma cor.
+/// Preenche um retângulo arredondado com uma cor (mistura normal, borda suave).
+///
+/// Desenhado direto nos pixels pela distância à borda (como `soft_shadow`): é a forma
+/// mais desenhada da interface (botões, cápsulas, linhas escolhidas, painéis), e o
+/// caminho genérico do tiny-skia (amostra cada pixel 4 vezes na borda) custava uma boa
+/// parte de cada quadro numa janela cheia de controles.
 pub fn fill_rounded(pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, r: f32, color: Color) {
-    if let Some(path) = rounded_rect(x, y, w, h, r) {
-        let mut paint = Paint::default();
-        paint.set_color(color);
-        paint.anti_alias = true;
-        pixmap.fill_path(&path, &paint, FillRule::Winding, tf(), None);
+    let c = color.premultiply().to_color_u8();
+    let (sr, sg, sb, sa) = (c.red() as u32, c.green() as u32, c.blue() as u32, c.alpha() as u32);
+    if sa == 0 {
+        return;
     }
+    let k = scale();
+    let shape = RoundedPx::new(x * k, y * k, w * k, h * k, r * k);
+    let width = pixmap.width() as usize;
+    let height = pixmap.height() as usize;
+    let opaque = c;
+    let pixels = pixmap.pixels_mut();
+    // Os pixels como bytes, para misturar (mesma memória: RGBA premultiplicado).
+    shape.cover(width, height, |start, len, cov| {
+        let cc = (cov * 255.0 + 0.5) as u32;
+        let (r, g, b, a) = if cc >= 255 { (sr, sg, sb, sa) } else { (div255(sr * cc), div255(sg * cc), div255(sb * cc), div255(sa * cc)) };
+        if a == 255 {
+            pixels[start..start + len].fill(opaque);
+            return;
+        }
+        let span = &mut pixels[start..start + len];
+        let inv = 255 - a;
+        for px in span.iter_mut() {
+            // Com o arredondamento, uma cor pode passar do alfa por 1: fica no alfa.
+            let oa = (a + div255(px.alpha() as u32 * inv)).min(255);
+            let ch = |s: u32, d: u8| (s + div255(d as u32 * inv)).min(oa) as u8;
+            if let Some(m) = tiny_skia::PremultipliedColorU8::from_rgba(ch(r, px.red()), ch(g, px.green()), ch(b, px.blue()), oa as u8) {
+                *px = m;
+            }
+        }
+    });
 }
 
 /// Apaga (deixa transparente) um retângulo de cantos arredondados: tira a sombra de
 /// baixo de um painel translúcido antes de pintá-lo (senão o vidro fica acinzentado).
 pub fn clear_rounded(pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, r: f32) {
-    if let Some(path) = rounded_rect(x, y, w, h, r) {
-        let mut paint = Paint::default();
-        paint.blend_mode = tiny_skia::BlendMode::Clear;
-        paint.anti_alias = true;
-        pixmap.fill_path(&path, &paint, FillRule::Winding, tf(), None);
+    let k = scale();
+    let shape = RoundedPx::new(x * k, y * k, w * k, h * k, r * k);
+    let width = pixmap.width() as usize;
+    let data = pixmap.data_mut();
+    shape.cover(width, data.len() / 4 / width.max(1), |start, len, cov| {
+        let keep = 255 - (cov * 255.0 + 0.5) as u32;
+        let span = &mut data[start * 4..(start + len) * 4];
+        if keep == 0 {
+            span.fill(0);
+            return;
+        }
+        for v in span.iter_mut() {
+            *v = div255(*v as u32 * keep) as u8;
+        }
+    });
+}
+
+/// Contorno de um retângulo arredondado, com a linha de largura `width` centrada na
+/// borda (como `stroke_path` com `rounded_rect`), desenhado direto nos pixels: a faixa
+/// entre a forma aumentada e a diminuída de meia largura.
+#[allow(clippy::too_many_arguments)]
+pub fn stroke_rounded(pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, r: f32, width: f32, color: Color) {
+    let c = color.premultiply().to_color_u8();
+    let (sr, sg, sb, sa) = (c.red() as u32, c.green() as u32, c.blue() as u32, c.alpha() as u32);
+    if sa == 0 || width <= 0.0 {
+        return;
+    }
+    let k = scale();
+    let half = width / 2.0;
+    let outer = RoundedPx::new((x - half) * k, (y - half) * k, (w + width) * k, (h + width) * k, (r + half).max(0.0) * k);
+    let inner = RoundedPx::new((x + half) * k, (y + half) * k, (w - width).max(0.0) * k, (h - width).max(0.0) * k, (r - half).max(0.0) * k);
+    let pw = pixmap.width() as usize;
+    let ph = pixmap.height() as usize;
+    let data = pixmap.data_mut();
+    let (x0, x1) = ((outer.x.floor() as i32).max(0), ((outer.x + outer.w).ceil() as i32).min(pw as i32));
+    let (y0, y1) = ((outer.y.floor() as i32).max(0), ((outer.y + outer.h).ceil() as i32).min(ph as i32));
+    let mut put = |idx: usize, cov: f32| {
+        let cc = (cov * 255.0 + 0.5) as u32;
+        if cc == 0 {
+            return;
+        }
+        let (r, g, b, a) = (div255(sr * cc), div255(sg * cc), div255(sb * cc), div255(sa * cc));
+        let inv = 255 - a;
+        let px = &mut data[idx * 4..idx * 4 + 4];
+        px[0] = (r + div255(px[0] as u32 * inv)) as u8;
+        px[1] = (g + div255(px[1] as u32 * inv)) as u8;
+        px[2] = (b + div255(px[2] as u32 * inv)) as u8;
+        px[3] = (a + div255(px[3] as u32 * inv)) as u8;
+    };
+    for row in y0..y1 {
+        let py = row as f32 + 0.5;
+        let ring = |col: i32| {
+            let px = col as f32 + 0.5;
+            (outer.coverage(px, py) - inner.coverage(px, py)).clamp(0.0, 1.0)
+        };
+        // Nas linhas do meio só as duas bordas têm linha: anda da esquerda e da direita
+        // até o anel acabar (o miolo é pulado).
+        let base = row as usize * pw;
+        let mid_inner = inner.coverage(inner.x + inner.w / 2.0, py);
+        if mid_inner >= 1.0 {
+            let mut col = x0;
+            while col < x1 {
+                let px = col as f32 + 0.5;
+                let c = ring(col);
+                put(base + col as usize, c);
+                if inner.coverage(px, py) >= 1.0 {
+                    break;
+                }
+                col += 1;
+            }
+            let mut col = x1 - 1;
+            while col >= x0 {
+                let px = col as f32 + 0.5;
+                let c = ring(col);
+                put(base + col as usize, c);
+                if inner.coverage(px, py) >= 1.0 {
+                    break;
+                }
+                col -= 1;
+            }
+        } else {
+            for col in x0..x1 {
+                put(base + col as usize, ring(col));
+            }
+        }
+    }
+}
+
+/// Divisão por 255 arredondada, em inteiros (a mistura das cores premultiplicadas).
+#[inline]
+fn div255(v: u32) -> u32 {
+    (v + 128 + ((v + 128) >> 8)) >> 8
+}
+
+/// Retângulo arredondado em pixels, com a cobertura de cada pixel pela distância do
+/// centro dele à borda (borda suave de 1 pixel).
+struct RoundedPx {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    r: f32,
+}
+
+impl RoundedPx {
+    fn new(x: f32, y: f32, w: f32, h: f32, r: f32) -> Self {
+        let (w, h) = (w.max(0.0), h.max(0.0));
+        Self { x, y, w, h, r: r.min(w / 2.0).min(h / 2.0).max(0.0) }
+    }
+
+    /// Cobertura (0 a 1) do pixel com centro em (`px`, `py`).
+    #[inline]
+    fn coverage(&self, px: f32, py: f32) -> f32 {
+        if self.w <= 0.0 || self.h <= 0.0 {
+            return 0.0;
+        }
+        let (hw, hh) = (self.w / 2.0, self.h / 2.0);
+        let (qx, qy) = ((px - self.x - hw).abs() - hw + self.r, (py - self.y - hh).abs() - hh + self.r);
+        let d = if qx > 0.0 && qy > 0.0 { qx.hypot(qy) - self.r } else { qx.max(qy) - self.r };
+        (0.5 - d).clamp(0.0, 1.0)
+    }
+
+    /// Chama `put(primeiro_pixel, quantos, cobertura)` para as partes cobertas, linha a
+    /// linha: as bordas pixel a pixel e o miolo de cada linha num trecho só.
+    fn cover(&self, width: usize, height: usize, mut put: impl FnMut(usize, usize, f32)) {
+        if self.w <= 0.0 || self.h <= 0.0 {
+            return;
+        }
+        let x0 = (self.x.floor() as i32).max(0);
+        let x1 = ((self.x + self.w).ceil() as i32).min(width as i32);
+        let y0 = (self.y.floor() as i32).max(0);
+        let y1 = ((self.y + self.h).ceil() as i32).min(height as i32);
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let mid = self.x + self.w / 2.0;
+        for row in y0..y1 {
+            let py = row as f32 + 0.5;
+            let full = self.coverage(mid, py);
+            if full <= 0.0 {
+                continue;
+            }
+            let base = row as usize * width;
+            // Da esquerda até chegar à cobertura do meio da linha.
+            let mut left = x0;
+            while left < x1 {
+                let c = self.coverage(left as f32 + 0.5, py);
+                if c >= full - 1e-4 {
+                    break;
+                }
+                if c > 0.0 {
+                    put(base + left as usize, 1, c);
+                }
+                left += 1;
+            }
+            // Da direita, sem passar da esquerda.
+            let mut right = x1 - 1;
+            while right >= left {
+                let c = self.coverage(right as f32 + 0.5, py);
+                if c >= full - 1e-4 {
+                    break;
+                }
+                if c > 0.0 {
+                    put(base + right as usize, 1, c);
+                }
+                right -= 1;
+            }
+            if right >= left {
+                put(base + left as usize, (right - left + 1) as usize, full);
+            }
+        }
     }
 }
 
@@ -322,7 +517,9 @@ pub fn copy_rgba(dst: &mut Pixmap, pixels: &[u8], w: u32, h: u32, x: i32, y: i32
     }
 }
 
-/// Como `blit`, com a posição já em pixels (colar uma área desenhada à parte).
+/// Como `blit`, com a posição já em pixels (colar uma área desenhada à parte). Direto
+/// nos bytes (RGBA premultiplicado nos dois lados): pixel opaco é copiado, transparente
+/// é pulado, e o resto mistura em inteiros.
 pub fn blit_px(dst: &mut Pixmap, src: &Pixmap, x: i32, y: i32, opacity: f32) {
     let (dw, dh, sw, sh) = (dst.width() as i32, dst.height() as i32, src.width() as i32, src.height() as i32);
     let (x0, y0) = (x.max(0), y.max(0));
@@ -330,35 +527,42 @@ pub fn blit_px(dst: &mut Pixmap, src: &Pixmap, x: i32, y: i32, opacity: f32) {
     if x0 >= x1 || y0 >= y1 {
         return;
     }
-    let k = (opacity.clamp(0.0, 1.0) * 256.0) as u32;
-    let src_px = src.pixels();
-    let dst_px = dst.pixels_mut();
+    let k = (opacity.clamp(0.0, 1.0) * 255.0 + 0.5) as u32;
+    if k == 0 {
+        return;
+    }
+    let n = (x1 - x0) as usize * 4;
+    let src_data = src.data();
+    let dst_data = dst.data_mut();
     for row in y0..y1 {
-        let s_row = ((row - y) * sw) as usize;
-        let d_row = (row * dw) as usize;
-        for col in x0..x1 {
-            let sp = src_px[s_row + (col - x) as usize];
-            let (mut r, mut g, mut b, mut a) = (sp.red() as u32, sp.green() as u32, sp.blue() as u32, sp.alpha() as u32);
-            if k < 256 {
-                r = r * k >> 8;
-                g = g * k >> 8;
-                b = b * k >> 8;
-                a = a * k >> 8;
+        let s0 = (((row - y) * sw + (x0 - x)) * 4) as usize;
+        let d0 = ((row * dw + x0) * 4) as usize;
+        let srow = &src_data[s0..s0 + n];
+        let drow = &mut dst_data[d0..d0 + n];
+        if k >= 255 {
+            for (sp, dp) in srow.chunks_exact(4).zip(drow.chunks_exact_mut(4)) {
+                let a = sp[3] as u32;
+                if a == 255 {
+                    dp.copy_from_slice(sp);
+                } else if a != 0 {
+                    let inv = 255 - a;
+                    dp[0] = (sp[0] as u32 + div255(dp[0] as u32 * inv)).min(255) as u8;
+                    dp[1] = (sp[1] as u32 + div255(dp[1] as u32 * inv)).min(255) as u8;
+                    dp[2] = (sp[2] as u32 + div255(dp[2] as u32 * inv)).min(255) as u8;
+                    dp[3] = (a + div255(dp[3] as u32 * inv)).min(255) as u8;
+                }
             }
-            if a == 0 {
-                continue;
-            }
-            let d = &mut dst_px[d_row + col as usize];
-            if a == 255 {
-                *d = tiny_skia::PremultipliedColorU8::from_rgba(r as u8, g as u8, b as u8, 255).unwrap();
-                continue;
-            }
-            let inv = 255 - a;
-            let mix = |s: u32, d: u8| -> u8 { (s + (d as u32 * inv + 127) / 255).min(255) as u8 };
-            let out_a = mix(a, d.alpha());
-            let (or, og, ob) = (mix(r, d.red()).min(out_a), mix(g, d.green()).min(out_a), mix(b, d.blue()).min(out_a));
-            if let Some(c) = tiny_skia::PremultipliedColorU8::from_rgba(or, og, ob, out_a) {
-                *d = c;
+        } else {
+            for (sp, dp) in srow.chunks_exact(4).zip(drow.chunks_exact_mut(4)) {
+                let a = div255(sp[3] as u32 * k);
+                if a == 0 {
+                    continue;
+                }
+                let inv = 255 - a;
+                dp[0] = (div255(sp[0] as u32 * k) + div255(dp[0] as u32 * inv)).min(255) as u8;
+                dp[1] = (div255(sp[1] as u32 * k) + div255(dp[1] as u32 * inv)).min(255) as u8;
+                dp[2] = (div255(sp[2] as u32 * k) + div255(dp[2] as u32 * inv)).min(255) as u8;
+                dp[3] = (a + div255(dp[3] as u32 * inv)).min(255) as u8;
             }
         }
     }
@@ -584,3 +788,78 @@ mod tests {
         assert_eq!(p.pixel(2, 1).unwrap().red(), p.pixel(0, 1).unwrap().red());
     }
 }
+
+#[cfg(test)]
+mod fast_shapes {
+    use super::*;
+
+    fn old_fill(p: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, r: f32, color: Color) {
+        let path = rounded_rect(x, y, w, h, r).unwrap();
+        let mut paint = Paint::default();
+        paint.set_color(color);
+        paint.anti_alias = true;
+        p.fill_path(&path, &paint, FillRule::Winding, tf(), None);
+    }
+
+    fn max_diff(a: &Pixmap, b: &Pixmap) -> (u8, usize) {
+        let mut worst = 0u8;
+        let mut many = 0;
+        for (x, y) in a.data().iter().zip(b.data()) {
+            let d = x.abs_diff(*y);
+            worst = worst.max(d);
+            if d > 40 {
+                many += 1;
+            }
+        }
+        (worst, many)
+    }
+
+    #[test]
+    fn retangulo_arredondado_igual_ao_do_tiny_skia() {
+        for (scale, color) in [(1.0, Color::from_rgba8(30, 120, 250, 255)), (1.5, Color::from_rgba8(255, 255, 255, 120))] {
+            set_scale(scale);
+            let mut a = Pixmap::new(200, 120).unwrap();
+            let mut b = Pixmap::new(200, 120).unwrap();
+            a.fill(Color::from_rgba8(40, 40, 40, 255));
+            b.fill(Color::from_rgba8(40, 40, 40, 255));
+            fill_rounded(&mut a, 10.3, 8.0, 90.0, 40.0, 12.0, color);
+            old_fill(&mut b, 10.3, 8.0, 90.0, 40.0, 12.0, color);
+            let (worst, many) = max_diff(&a, &b);
+            // Só a borda suave pode diferir, e pouco.
+            assert!(worst < 110 && many < 40, "escala {scale}: diferença {worst}, {many} pixels");
+        }
+        set_scale(1.0);
+    }
+
+    #[test]
+    fn cola_imagem_com_transparencia() {
+        let mut dst = Pixmap::new(4, 1).unwrap();
+        dst.fill(Color::from_rgba8(0, 0, 255, 255));
+        let mut src = Pixmap::new(4, 1).unwrap();
+        src.fill(Color::from_rgba8(255, 0, 0, 128));
+        blit_px(&mut dst, &src, 0, 0, 1.0);
+        let p = dst.pixels()[0];
+        assert!((p.red() as i32 - 128).abs() <= 1 && (p.blue() as i32 - 127).abs() <= 2 && p.alpha() == 255, "{p:?}");
+        // Opaco copia; meia opacidade mistura.
+        let mut dst2 = Pixmap::new(2, 1).unwrap();
+        let mut red = Pixmap::new(2, 1).unwrap();
+        red.fill(Color::from_rgba8(255, 0, 0, 255));
+        blit_px(&mut dst2, &red, 0, 0, 1.0);
+        assert_eq!(dst2.pixels()[0].red(), 255);
+        let mut dst3 = Pixmap::new(2, 1).unwrap();
+        blit_px(&mut dst3, &red, 0, 0, 0.5);
+        assert!((dst3.pixels()[0].alpha() as i32 - 128).abs() <= 1);
+    }
+
+    #[test]
+    fn contorno_so_na_borda() {
+        set_scale(1.0);
+        let mut p = Pixmap::new(60, 40).unwrap();
+        stroke_rounded(&mut p, 10.5, 10.5, 39.0, 19.0, 6.0, 1.0, Color::from_rgba8(0, 0, 0, 255));
+        // Meio vazio, borda pintada.
+        assert_eq!(p.pixel(30, 20).unwrap().alpha(), 0);
+        assert!(p.pixel(30, 10).unwrap().alpha() > 200);
+        assert!(p.pixel(10, 20).unwrap().alpha() > 200);
+    }
+}
+

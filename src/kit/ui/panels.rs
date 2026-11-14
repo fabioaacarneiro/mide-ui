@@ -3,7 +3,7 @@
 //! botões de ícone com dica (`tool_button`, `tool_group`), o ponteiro pedido pelo
 //! app (`set_cursor`) e as janelas filhas (`open_window`).
 
-use super::{color, fill_rounded, Paint, Response, Stroke, Ui, LIGHT_SIZE};
+use super::{color, fill_rounded, Response, Ui, LIGHT_SIZE};
 use crate::kit::app::Window;
 
 /// Forma do ponteiro pedida por um componente (`Ui::set_cursor`). Vale enquanto o
@@ -122,7 +122,8 @@ impl<'a> Ui<'a> {
         let t = self.ctx.theme.clone();
         self.ctx.glass_capable = true;
         if self.ctx.glass_enabled() {
-            crate::ui::draw::clear_rounded(self.canvas, rect.0, rect.1, rect.2, rect.3, radius);
+            // `paint_rounded_solid` já substitui o que havia por baixo (apagar antes era
+            // um preenchimento a mais do painel inteiro a cada quadro).
             crate::ui::draw::paint_rounded_solid(self.canvas, rect.0, rect.1, rect.2, rect.3, radius, t.sidebar_glass);
             self.ctx.glass.push((self.offset.0 + rect.0, self.offset.1 + rect.1, rect.2, rect.3, radius));
             true
@@ -230,11 +231,7 @@ impl<'a> Ui<'a> {
         }
         self.glass_fill(panel, radius);
         let top = if tahoe {
-            if let Some(path) = crate::ui::draw::rounded_rect(panel.0 + 0.5, panel.1 + 0.5, panel.2 - 1.0, panel.3 - 1.0, radius - 0.5) {
-                let mut paint = Paint { anti_alias: true, ..Default::default() };
-                paint.set_color(color(if t.dark { [255, 255, 255, 34] } else { [0, 0, 0, 20] }));
-                self.canvas.stroke_path(&path, &paint, &Stroke { width: 1.0, ..Default::default() }, crate::ui::draw::tf(), None);
-            }
+            crate::ui::draw::stroke_rounded(self.canvas, panel.0 + 0.5, panel.1 + 0.5, panel.2 - 1.0, panel.3 - 1.0, radius - 0.5, 1.0, color(if t.dark { [255, 255, 255, 34] } else { [0, 0, 0, 20] }));
             self.window_controls(x + 20.0, y + (crate::kit::theme::TOOLBAR_HEIGHT - LIGHT_SIZE) / 2.0);
             y + crate::kit::theme::TOOLBAR_HEIGHT
         } else {

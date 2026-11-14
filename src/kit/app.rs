@@ -452,6 +452,7 @@ pub fn run(window: Window, app: impl App + 'static) -> Result<(), Box<dyn Error>
         tick_at: std::time::Instant::now(),
         app_id: window.app_id.clone(),
         last_frame: None,
+        spare_frame: None,
         pointer: None,
         conn: conn.clone(),
         cursor_applied: Cursor::Default,
@@ -729,6 +730,10 @@ struct Runner {
     app_id: String,
     /// Último quadro enviado (para não reenviar um igual).
     last_frame: Option<Pixmap>,
+    /// Imagem de um quadro anterior, reaproveitada no próximo: criar uma imagem da janela
+    /// inteira a cada quadro (memória nova, zerada página a página) custava mais que
+    /// limpar a que já existe.
+    spare_frame: Option<Pixmap>,
     /// O ponteiro, com a forma pedida pelos componentes (`Ui::set_cursor`): pelo
     /// `wp_cursor_shape` quando o compositor tem, senão pelo tema de cursores.
     pointer: Option<ThemedPointer>,
@@ -948,10 +953,19 @@ impl Runner {
         let mut pixmap = None;
         // Imagem em pixels (tamanho em pontos vezes a escala); o layout continua em pontos.
         crate::ui::draw::set_scale(self.scale);
+        // Medidas do quadro (no log de depuração): quantas passadas e o tempo do `view`.
+        let mut passes = 0;
+        let mut view_time = std::time::Duration::ZERO;
         for _ in 0..2 {
+            passes += 1;
+            let view_start = std::time::Instant::now();
             // Medido a cada passada: o app pode ter pedido outro tamanho na anterior.
             let (pw, ph) = self.physical_size();
-            let Some(mut canvas) = Pixmap::new(pw, ph) else {
+            let reused = self.spare_frame.take().filter(|p| p.width() == pw && p.height() == ph).map(|mut p| {
+                p.data_mut().fill(0);
+                p
+            });
+            let Some(mut canvas) = reused.or_else(|| Pixmap::new(pw, ph)) else {
                 return;
             };
             self.ctx.begin_frame();
@@ -978,6 +992,7 @@ impl Runner {
             }
             // Menus de contexto ficam por cima de tudo.
             self.ctx.paint_overlay(&mut canvas);
+            view_time += view_start.elapsed();
             // Escolha num menu da barra da janela: os do menu "Janela" são da janela; o
             // resto vai ao app no próximo quadro (como os da barra superior).
             // Tela cheia pedida pelo app (`Ui::set_fullscreen`).
@@ -1088,12 +1103,14 @@ impl Runner {
             layer.set_keyboard_interactivity(if raised { KeyboardInteractivity::Exclusive } else { KeyboardInteractivity::OnDemand });
             layer.commit();
         }
+        let menus_start = std::time::Instant::now();
         let groups = self.app.menu_bar();
         match &mut self.menus {
             Some(menus) => menus.update(groups),
             None if !groups.is_empty() => self.menus = super::menubar::Published::start(groups, self.ctx.waker.clone()),
             None => {}
         }
+        let menus_time = menus_start.elapsed();
         let Some(pixmap) = pixmap else {
             return;
         };
@@ -1130,13 +1147,19 @@ impl Runner {
         // Quadro igual ao último enviado (por exemplo, um quadro agendado sem mudança):
         // não manda de novo, para o compositor não refazer o que está atrás (vidro).
         if self.last_frame.as_ref().is_some_and(|last| last.width() == w && last.height() == h && last.data() == pixmap.data()) {
+            self.spare_frame = Some(pixmap);
             return;
         }
         let Ok((buffer, canvas)) = self.pool.create_buffer(w as i32, h as i32, w as i32 * 4, wl_shm::Format::Argb8888) else {
             return;
         };
         to_argb8888(&pixmap, canvas);
-        tracing::debug!("quadro do app: {:.2} ms", start.elapsed().as_secs_f32() * 1000.0);
+        tracing::debug!(
+            "quadro do app: {:.2} ms (passadas {passes}, view {:.2} ms, menus {:.2} ms)",
+            start.elapsed().as_secs_f32() * 1000.0,
+            view_time.as_secs_f32() * 1000.0,
+            menus_time.as_secs_f32() * 1000.0
+        );
         let surface = self.shell.wl_surface();
         // Só onde o app desenha recebe cliques (`Ui::input_area`).
         match self.ctx.input_region.take() {
@@ -1161,7 +1184,7 @@ impl Runner {
         if buffer.attach_to(surface).is_ok() {
             self.shell.commit();
         }
-        self.last_frame = Some(pixmap);
+        self.spare_frame = self.last_frame.replace(pixmap);
     }
 }
 
