@@ -540,7 +540,7 @@ pub fn blit_px(dst: &mut Pixmap, src: &Pixmap, x: i32, y: i32, opacity: f32) {
         let srow = &src_data[s0..s0 + n];
         let drow = &mut dst_data[d0..d0 + n];
         if k >= 255 {
-            for (sp, dp) in srow.chunks_exact(4).zip(drow.chunks_exact_mut(4)) {
+            for (sp, dp) in srow.as_chunks::<4>().0.iter().zip(drow.as_chunks_mut::<4>().0.iter_mut()) {
                 let a = sp[3] as u32;
                 if a == 255 {
                     dp.copy_from_slice(sp);
@@ -553,7 +553,7 @@ pub fn blit_px(dst: &mut Pixmap, src: &Pixmap, x: i32, y: i32, opacity: f32) {
                 }
             }
         } else {
-            for (sp, dp) in srow.chunks_exact(4).zip(drow.chunks_exact_mut(4)) {
+            for (sp, dp) in srow.as_chunks::<4>().0.iter().zip(drow.as_chunks_mut::<4>().0.iter_mut()) {
                 let a = div255(sp[3] as u32 * k);
                 if a == 0 {
                     continue;

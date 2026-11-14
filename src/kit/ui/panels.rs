@@ -166,7 +166,7 @@ impl<'a> Ui<'a> {
         let (x, y, w, h) = (area.0 - self.offset.0, area.1 - self.offset.1, area.2, area.3.max(1.0));
         let hi = max.min(w - 80.0).max(min);
         *left_width = left_width.clamp(min, hi);
-        let r = self.divider((x + *left_width - DIVIDER_HIT / 2.0, y, DIVIDER_HIT, h), true, left_width, min, hi, 1.0);
+        let r = self.divider((x, y, w, h), (x + *left_width - DIVIDER_HIT / 2.0, y, DIVIDER_HIT, h), true, left_width, min, hi, 1.0);
         let lw = *left_width;
         let t = self.ctx.theme.clone();
         fill_rounded(self.canvas, x + lw, y, 1.0, h, 0.0, color(t.line));
@@ -196,7 +196,7 @@ impl<'a> Ui<'a> {
         let hi = max.min(h - 60.0).max(min);
         *bottom_height = bottom_height.clamp(min, hi);
         let edge = y + h - *bottom_height;
-        let r = self.divider((x, edge - DIVIDER_HIT / 2.0, w, DIVIDER_HIT), false, bottom_height, min, hi, -1.0);
+        let r = self.divider((x, y, w, h), (x, edge - DIVIDER_HIT / 2.0, w, DIVIDER_HIT), false, bottom_height, min, hi, -1.0);
         let bh = *bottom_height;
         let edge = y + h - bh;
         let t = self.ctx.theme.clone();
@@ -220,7 +220,7 @@ impl<'a> Ui<'a> {
         let h = (self.visible.1 - y).max(1.0);
         let hi = max.min(w - 80.0).max(min);
         *width = width.clamp(min, hi);
-        let r = self.divider((x + *width - DIVIDER_HIT / 2.0, y, DIVIDER_HIT, h), true, width, min, hi, 1.0);
+        let r = self.divider((x, y, w, h), (x + *width - DIVIDER_HIT / 2.0, y, DIVIDER_HIT, h), true, width, min, hi, 1.0);
         let sw = *width;
         let tahoe = self.ctx.content_window;
         let inset = if tahoe { crate::kit::theme::INSET_FLOAT } else { 0.0 };
@@ -251,8 +251,13 @@ impl<'a> Ui<'a> {
 
     /// A divisória: a faixa `hit` pega o ponteiro, arrastar muda `value` (com `sign`
     /// +1 cresce para a direita/baixo, -1 para a esquerda/cima) entre `min` e `max`.
-    fn divider(&mut self, hit: (f32, f32, f32, f32), horizontal: bool, value: &mut f32, min: f32, max: f32, sign: f32) -> Response {
-        let id = self.ctx.id();
+    /// A identidade vem da área dividida `area` (que não muda ao arrastar), sem gastar
+    /// o número dos componentes seguintes: uma divisória que aparece ou some (o painel
+    /// de símbolos de um editor) não muda a identidade do campo de texto desenhado
+    /// depois, que perderia o foco do teclado.
+    #[allow(clippy::too_many_arguments)]
+    fn divider(&mut self, area: (f32, f32, f32, f32), hit: (f32, f32, f32, f32), horizontal: bool, value: &mut f32, min: f32, max: f32, sign: f32) -> Response {
+        let id = divider_id(area, horizontal);
         let mut r = self.interact(id, hit);
         let along = |p: (f32, f32)| if horizontal { p.0 } else { p.1 };
         let pointer = self.pointer();
@@ -336,4 +341,13 @@ impl<'a> Ui<'a> {
         }
         clicked
     }
+}
+
+/// Identidade de uma divisória pela área que ela divide e pela direção: fora da faixa
+/// do contador dos componentes (bit 62 ligado; as barras de rolagem usam o 63).
+fn divider_id(area: (f32, f32, f32, f32), horizontal: bool) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (area.0.to_bits(), area.1.to_bits(), area.2.to_bits(), area.3.to_bits(), horizontal).hash(&mut h);
+    (h.finish() & ((1 << 62) - 1)) | (1 << 62)
 }
