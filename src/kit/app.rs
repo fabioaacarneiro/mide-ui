@@ -699,7 +699,7 @@ struct Runner {
     press_serial: u32,
     /// Arrasto que esta janela começou: a origem, os endereços e o ícone (superfície e
     /// a imagem, que precisa viver até o fim).
-    drag: Option<(DragSource, Vec<String>, Option<(wl_surface::WlSurface, smithay_client_toolkit::shm::slot::Buffer)>)>,
+    drag: Option<(DragSource, Vec<String>, Option<(wl_surface::WlSurface, smithay_client_toolkit::shm::slot::Buffer, Option<WpViewport>)>)>,
     qh: QueueHandle<Runner>,
     loop_handle: LoopHandle<'static, Runner>,
     registry_state: RegistryState,
@@ -2305,13 +2305,13 @@ const DRAG_MIMES: [&str; 2] = ["text/uri-list", "text/plain;charset=utf-8"];
 impl Runner {
     /// Começa o arrasto pedido pelo app (`Ui::start_drag`) com o serial do clique.
     fn start_drag(&mut self) {
-        let mut from = self.ctx.drag_out.take().map(|d| (self.shell.wl_surface().clone(), d));
+        let mut from = self.ctx.drag_out.take().map(|d| (self.shell.wl_surface().clone(), d, self.scale));
         for child in &mut self.children {
             if let Some(d) = child.ctx.drag_out.take() {
-                from = Some((child.xdg.wl_surface().clone(), d));
+                from = Some((child.xdg.wl_surface().clone(), d, child.scale));
             }
         }
-        let Some((from_surface, (uris, icon))) = from else {
+        let Some((from_surface, (uris, icon), scale)) = from else {
             return;
         };
         let (Some(manager), Some(device)) = (&self.data_devices, &self.data_device) else {
@@ -2324,8 +2324,28 @@ impl Runner {
             to_argb8888(&pixmap, canvas);
             let surface = self.compositor.create_surface(&self.qh);
             use smithay_client_toolkit::reexports::client::Proxy;
+            // A imagem vem em pixels da tela (pontos vezes a escala da janela): o
+            // compositor a mostra no tamanho em pontos, sem ampliar (nítida em 125, 150 e
+            // 200%). Com o viewporter, qualquer escala; sem ele, a escala inteira.
+            let k = scale.max(1.0);
+            let (lw, lh) = ((w as f32 / k).round().max(1.0) as i32, (h as f32 / k).round().max(1.0) as i32);
+            let viewport = if k > 1.0 {
+                match &self.viewporter {
+                    Some(viewporter) => {
+                        let viewport = viewporter.get_viewport(&surface, &self.qh, ());
+                        viewport.set_destination(lw, lh);
+                        Some(viewport)
+                    }
+                    None => {
+                        surface.set_buffer_scale(k.round() as i32);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             // Ícone centrado no ponteiro (antes da versão 5, pelo próprio `attach`).
-            let (dx, dy) = (-(w as i32) / 2, -(h as i32) / 2);
+            let (dx, dy) = (-lw / 2, -lh / 2);
             if surface.version() >= 5 {
                 buffer.attach_to(&surface).ok()?;
                 surface.offset(dx, dy);
@@ -2334,9 +2354,9 @@ impl Runner {
             }
             surface.damage_buffer(0, 0, w as i32, h as i32);
             surface.commit();
-            Some((surface, buffer))
+            Some((surface, buffer, viewport))
         });
-        source.start_drag(device, &from_surface, icon.as_ref().map(|(s, _)| s), self.press_serial);
+        source.start_drag(device, &from_surface, icon.as_ref().map(|(s, _, _)| s), self.press_serial);
         tracing::debug!("arrasto entre apps: {} item(ns)", uris.len());
         // O compositor fica com o ponteiro até soltar: para o app, o botão foi solto.
         let window = self.window_of(&from_surface).flatten();
@@ -2348,7 +2368,10 @@ impl Runner {
 
     fn end_drag(&mut self, source: &WlDataSource) {
         if self.drag.as_ref().is_some_and(|(d, _, _)| d.inner() == source) {
-            if let Some((_, _, Some((surface, _)))) = self.drag.take() {
+            if let Some((_, _, Some((surface, _, viewport)))) = self.drag.take() {
+                if let Some(viewport) = viewport {
+                    viewport.destroy();
+                }
                 surface.destroy();
             }
             self.ctx.input.drag_ended = true;

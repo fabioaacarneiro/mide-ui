@@ -2628,8 +2628,11 @@ impl<'a> Ui<'a> {
 
     /// Começa um arrasto entre apps (só com o botão segurado): os arquivos vão como
     /// `text/uri-list` para quem receber (outro app, um site no navegador ou esta mesma
-    /// janela, que recebe em `input().dropped`). O `icon` segue o ponteiro, centrado.
-    /// Enquanto o arrasto dura, o ponteiro é do compositor: o botão é dado como solto.
+    /// janela, que recebe em `input().dropped`). O `icon` segue o ponteiro, centrado,
+    /// e vem em pixels da tela: pontos vezes [`crate::ui::draw::scale`] (como as
+    /// funções do `draw`, que já multiplicam pela escala); o compositor o mostra no
+    /// tamanho em pontos. Enquanto o arrasto dura, o ponteiro é do compositor: o botão
+    /// é dado como solto.
     pub fn start_drag(&mut self, paths: &[std::path::PathBuf], icon: Option<Pixmap>) {
         let uris = paths.iter().map(|p| crate::thumbnails::file_uri(p)).collect();
         self.ctx.drag_out = Some((uris, icon));
