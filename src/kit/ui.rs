@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 
 mod panels;
+mod charts;
 pub use panels::{Cursor, Tool};
 
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, PixmapPaint, Stroke, Transform};
