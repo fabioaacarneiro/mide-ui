@@ -247,6 +247,8 @@ pub const SYMBOLS: &[(&str, &str)] = &[
     ("window-close-symbolic", r##"<path d="m3.5 3.5 9 9m0-9-9 9" stroke="#000" stroke-width="1.5" stroke-linecap="round"/>"##),
     // Encerrar processo: o "x" dentro do círculo (o botão do Monitor de Recursos).
     ("process-stop-symbolic", r##"<circle cx="8" cy="8" r="6.4" fill="none" stroke="#000" stroke-width="1.4"/><path d="m5.6 5.6 4.8 4.8m0-4.8-4.8 4.8" stroke="#000" stroke-width="1.4" stroke-linecap="round"/>"##),
+    // Conversa (o painel do agente no Code): balão com a ponta embaixo e três pontos.
+    ("chat-symbolic", r##"<path d="M3.4 2.5h9.2a1.9 1.9 0 0 1 1.9 1.9v5.2a1.9 1.9 0 0 1-1.9 1.9H7.2l-3.2 2.6v-2.6h-.6a1.9 1.9 0 0 1-1.9-1.9V4.4a1.9 1.9 0 0 1 1.9-1.9z" fill="none" stroke="#000" stroke-width="1.3" stroke-linejoin="round"/><circle cx="5.3" cy="7" r=".9"/><circle cx="8" cy="7" r=".9"/><circle cx="10.7" cy="7" r=".9"/>"##),
     // Informações: o "i" dentro do círculo.
     ("dialog-information-symbolic", r##"<circle cx="8" cy="8" r="6.4" fill="none" stroke="#000" stroke-width="1.4"/><circle cx="8" cy="5" r=".95" fill="#000"/><path d="M8 7.3v4.4" stroke="#000" stroke-width="1.5" stroke-linecap="round"/>"##),
     // Desligar: o círculo aberto em cima com o traço.
