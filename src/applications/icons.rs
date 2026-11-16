@@ -245,6 +245,10 @@ pub const SYMBOLS: &[(&str, &str)] = &[
     ("list-add-symbolic", r##"<path d="M8 2.5v11M2.5 8h11" stroke="#000" stroke-width="1.5" stroke-linecap="round"/>"##),
     // Fechar.
     ("window-close-symbolic", r##"<path d="m3.5 3.5 9 9m0-9-9 9" stroke="#000" stroke-width="1.5" stroke-linecap="round"/>"##),
+    // Encerrar processo: o "x" dentro do círculo (o botão do Monitor de Recursos).
+    ("process-stop-symbolic", r##"<circle cx="8" cy="8" r="6.4" fill="none" stroke="#000" stroke-width="1.4"/><path d="m5.6 5.6 4.8 4.8m0-4.8-4.8 4.8" stroke="#000" stroke-width="1.4" stroke-linecap="round"/>"##),
+    // Informações: o "i" dentro do círculo.
+    ("dialog-information-symbolic", r##"<circle cx="8" cy="8" r="6.4" fill="none" stroke="#000" stroke-width="1.4"/><circle cx="8" cy="5" r=".95" fill="#000"/><path d="M8 7.3v4.4" stroke="#000" stroke-width="1.5" stroke-linecap="round"/>"##),
     // Desligar: o círculo aberto em cima com o traço.
     ("system-shutdown-symbolic", r##"<path d="M8 1.6v5.6" stroke="#000" stroke-width="1.5" stroke-linecap="round"/><path d="M4.7 3.9a5.3 5.3 0 1 0 6.6 0" fill="none" stroke="#000" stroke-width="1.5" stroke-linecap="round"/>"##),
     // Reiniciar: a volta com a ponta da seta.
