@@ -3660,7 +3660,9 @@ impl<'a> Ui<'a> {
         let t = self.ctx.theme.clone();
         // Com foco, o cursor pisca: o quadro é refeito na próxima troca do piscar (não a
         // cada 16 ms: um campo em foco redesenhava o app sem parar, até na tela de bloqueio).
-        self.wake_after(caret_wait());
+        if let Some(wait) = caret_wait() {
+            self.wake_after(wait);
+        }
         let edit = self.ctx.memory.edit;
         let cursor_x = self.measure(&value[..edit.cursor], t.font, FontWeight::Regular);
         let total = self.measure(value, t.font, FontWeight::Regular);
@@ -6066,6 +6068,18 @@ mod tests {
     use super::toward_panel;
 
     #[test]
+    fn cursor_para_de_piscar_sem_uso() {
+        use super::{caret_on, caret_wait, note_input, now_ms, BLINK_TIMEOUT_MS, LAST_INPUT_MS};
+        use std::sync::atomic::Ordering;
+        note_input();
+        assert!(caret_wait().is_some_and(|w| w <= std::time::Duration::from_millis(501)));
+        LAST_INPUT_MS.store(now_ms() - BLINK_TIMEOUT_MS - 1, Ordering::Relaxed);
+        assert!(caret_wait().is_none(), "sem uso, nada de quadros para piscar");
+        assert!(caret_on(), "parado, o cursor fica aceso");
+        note_input();
+    }
+
+    #[test]
     fn triangulo_seguro_do_submenu() {
         // Ponteiro em (150, 100) na linha do submenu; submenu à direita, de 210 a 440
         // na horizontal e de 95 a 395 na vertical (alto, como o Novo arquivo).
@@ -6743,17 +6757,52 @@ impl FocusAnim {
         if elapsed < Self::SOLID_MS {
             return Some(std::time::Duration::from_secs_f32((Self::SOLID_MS - elapsed) / 1000.0));
         }
-        Some(caret_wait())
+        caret_wait()
     }
 }
 
-/// Até a próxima troca do cursor que pisca (aceso/apagado a cada meio segundo).
-fn caret_wait() -> std::time::Duration {
-    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
-    std::time::Duration::from_millis((500 - (ms % 500) as u64).max(1) + 1)
+/// Depois deste tempo sem teclado nem ponteiro, o cursor de texto para de piscar e fica
+/// aceso (como o `gtk-cursor-blink-timeout` do GTK): um campo com foco esquecido aberto
+/// (a senha da tela de bloqueio, com a tela apagada) não redesenha o app duas vezes por
+/// segundo para sempre.
+const BLINK_TIMEOUT_MS: u64 = 10_000;
+
+/// Hora (ms desde 1970) da última tecla, clique ou movimento do ponteiro; 0 = ainda nada.
+static LAST_INPUT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
-/// Cursor de texto aceso: pisca a cada meio segundo, como nos campos do sistema.
+/// O usuário mexeu (tecla, ponteiro): o cursor volta a piscar.
+pub(crate) fn note_input() {
+    LAST_INPUT_MS.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Quanto falta para o cursor parar de piscar (`None` = já parou). A contagem começa no
+/// primeiro uso, se nada foi tocado ainda.
+fn blink_left(now: u64) -> Option<u64> {
+    use std::sync::atomic::Ordering;
+    let mut last = LAST_INPUT_MS.load(Ordering::Relaxed);
+    if last == 0 {
+        LAST_INPUT_MS.store(now, Ordering::Relaxed);
+        last = now;
+    }
+    (last + BLINK_TIMEOUT_MS).checked_sub(now).filter(|left| *left > 0)
+}
+
+/// Até a próxima troca do cursor que pisca (aceso/apagado a cada meio segundo), ou até
+/// ele parar de piscar; `None` quando ele já parou (aceso, sem quadros novos).
+fn caret_wait() -> Option<std::time::Duration> {
+    let now = now_ms();
+    let left = blink_left(now)?;
+    let toggle = (500 - now % 500).max(1);
+    Some(std::time::Duration::from_millis(toggle.min(left) + 1))
+}
+
+/// Cursor de texto aceso: pisca a cada meio segundo, como nos campos do sistema, e fica
+/// aceso depois de um tempo sem uso.
 fn caret_on() -> bool {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(true, |d| (d.as_millis() / 500) % 2 == 0)
+    let now = now_ms();
+    blink_left(now).is_none() || (now / 500) % 2 == 0
 }

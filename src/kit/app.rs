@@ -2051,6 +2051,7 @@ impl SeatHandler for Runner {
 impl PointerHandler for Runner {
     fn pointer_frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_pointer::WlPointer, events: &[PointerEvent]) {
         const BTN_LEFT: u32 = 0x110;
+        super::ui::note_input();
         for event in events {
             // Onde a superfície do evento começa no desktop: a principal ou a camada de
             // outra tela (`Window::on_every_output`); uma janela filha tem a própria
@@ -2172,6 +2173,7 @@ impl KeyboardHandler for Runner {
 
 impl Runner {
     fn key(&mut self, event: KeyEvent) {
+        super::ui::note_input();
         let (ctx, dirty) = self.keyboard_ctx();
         *dirty = true;
         let input = &mut ctx.input;
