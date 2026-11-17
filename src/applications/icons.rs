@@ -238,6 +238,9 @@ pub const SYMBOLS: &[(&str, &str)] = &[
     ("view-sidebar-end-symbolic", r##"<rect x="1.5" y="2.5" width="13" height="11" rx="2.2" fill="none" stroke="#000" stroke-width="1.3"/><path d="M10 2.5v11" stroke="#000" stroke-width="1.3"/><path d="M11.5 5.2h1.2M11.5 7.2h1.2M11.5 9.2h1.2" stroke="#000" stroke-width="1.1" stroke-linecap="round"/>"##),
     ("view-sidebar-start-symbolic", r##"<rect x="1.5" y="2.5" width="13" height="11" rx="2.2" fill="none" stroke="#000" stroke-width="1.3"/><path d="M6 2.5v11" stroke="#000" stroke-width="1.3"/><path d="M3.3 5.2h1.2M3.3 7.2h1.2M3.3 9.2h1.2" stroke="#000" stroke-width="1.1" stroke-linecap="round"/>"##),
     // Mostrar o painel de baixo (terminal integrado).
+    // Visualização em colunas (Arquivos): o Adwaita não tem; sem ela, fora do tema do
+    // mide o botão mostrava a inicial do nome.
+    ("view-column-symbolic", r##"<rect x="1.5" y="2.5" width="13" height="11" rx="2.2" fill="none" stroke="#000" stroke-width="1.3"/><path d="M5.8 2.5v11M10.2 2.5v11" stroke="#000" stroke-width="1.3"/>"##),
     ("view-dual-symbolic", r##"<rect x="1.5" y="2.5" width="13" height="11" rx="2.2" fill="none" stroke="#000" stroke-width="1.3"/><path d="M1.5 9.5h13" stroke="#000" stroke-width="1.3"/>"##),
     // Terminal: janela com o prompt.
     ("utilities-terminal-symbolic", r##"<rect x="1.5" y="2.5" width="13" height="11" rx="2.2" fill="none" stroke="#000" stroke-width="1.3"/><path d="m4.3 6.2 2.2 1.8-2.2 1.8M8 10.6h3.5" fill="none" stroke="#000" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>"##),

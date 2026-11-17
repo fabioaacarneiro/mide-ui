@@ -5291,13 +5291,15 @@ impl<'a> Ui<'a> {
         let cy = rect.1 + rect.3 / 2.0;
         fill_rounded(self.canvas, tx, cy - 2.0, tw, 4.0, 2.0, color(t.shade(40)));
         fill_rounded(self.canvas, tx, cy - 2.0, tw * k, 4.0, 2.0, color(t.accent));
+        // O botão em pontos, com a escala da tela (como a faixa, que o fill_rounded
+        // escala): sem ela, em 150% ele aparecia longe do deslizante, a 2/3 do lugar.
         if let Some(knob) = PathBuilder::from_circle(tx + tw * k, cy, 6.0) {
             let mut paint = Paint::default();
             paint.anti_alias = true;
             paint.set_color(color([255, 255, 255, 255]));
-            self.canvas.fill_path(&knob, &paint, FillRule::Winding, Transform::identity(), None);
+            self.canvas.fill_path(&knob, &paint, FillRule::Winding, crate::ui::draw::tf(), None);
             paint.set_color(color(t.shade(70)));
-            self.canvas.stroke_path(&knob, &paint, &tiny_skia::Stroke { width: 1.0, ..Default::default() }, Transform::identity(), None);
+            self.canvas.stroke_path(&knob, &paint, &tiny_skia::Stroke { width: 1.0, ..Default::default() }, crate::ui::draw::tf(), None);
         }
         r
     }
